@@ -175,20 +175,189 @@ def main():
     model: Optional[FedEXTModel] = None
     feature_uploaded = False
 
-    while True:
-        task = stub.GetTask(fed_pb2.GetTaskRequest(client_id=client_id))
-        stage = task.stage if hasattr(task, "stage") else fed_pb2.STAGE_TRAINING
+    try:
+        while True:
+            task = stub.GetTask(fed_pb2.GetTaskRequest(client_id=client_id))
+            stage = task.stage if hasattr(task, "stage") else fed_pb2.STAGE_TRAINING
 
-        if stage == fed_pb2.STAGE_TRAINING:
-            if start_time is None and task.round < cfg.total_rounds:
-                start_time = time.time()
-                logger.info("Training timer started.")
+            if stage == fed_pb2.STAGE_TRAINING:
+                if start_time is None and task.round < cfg.total_rounds:
+                    start_time = time.time()
+                    logger.info("Training timer started.")
 
-            if task.round != last_round:
-                logger.info(f"[Client {client_id}] Enter round {task.round}")
-                last_round = task.round
+                if task.round != last_round:
+                    logger.info(f"[Client {client_id}] Enter round {task.round}")
+                    last_round = task.round
 
-            if not task.participate:
+                if not task.participate:
+                    if task.global_model:
+                        if model is None:
+                            model = FedEXTModel(
+                                client_index,
+                                cfg.model_name,
+                                args.feature_dim,
+                                args.num_classes,
+                                args.encoder_ratio,
+                            ).to(device)
+                        state_dict = bytes_to_state_dict(task.global_model)
+                        model.load_state_dict(state_dict, strict=False)
+                    time.sleep(1.0)
+                    continue
+
+                if model is None:
+                    model = FedEXTModel(
+                        client_index,
+                        task.config.model_name,
+                        args.feature_dim,
+                        args.num_classes,
+                        args.encoder_ratio,
+                    ).to(device)
+
+                if task.global_model:
+                    state_dict = bytes_to_state_dict(task.global_model)
+                    model.load_state_dict(state_dict, strict=False)
+
+                pre_test_loss, pre_test_acc = evaluate(model, test_loader, device=device)
+                logger.info(
+                    f"[Client {client_id}][Round {task.round}] (pre-trained) test_acc={pre_test_acc:.4f}"
+                )
+                client_pre_eval_acc.append(pre_test_acc)
+                client_pre_eval_loss.append(pre_test_loss)
+
+                optimizer = torch.optim.SGD(
+                    model.parameters(),
+                    lr=task.config.lr,
+                    momentum=task.config.momentum,
+                    weight_decay=5e-4,
+                )
+                train_loss_post, train_acc_post = train_local(
+                    model,
+                    train_loader,
+                    epochs=task.config.local_epochs,
+                    optimizer=optimizer,
+                    device=device,
+                )
+                test_loss, test_acc = evaluate(model, test_loader, device=device)
+                logger.info(
+                    f"[Client {client_id}][Round {task.round}] (post-trained) "
+                    f"train_acc={train_acc_post:.4f} test_acc={test_acc:.4f}"
+                )
+
+                client_post_eval_acc.append(test_acc)
+                client_post_eval_loss.append(test_loss)
+
+                local_bytes = state_dict_to_bytes(model.state_dict())
+                reply = stub.UploadUpdate(
+                    fed_pb2.UploadRequest(
+                        client_id=client_id,
+                        group_id=group_index,
+                        round=task.round,
+                        local_model=local_bytes,
+                        num_samples=train_size,
+                        train_loss=pre_test_loss,
+                        train_acc=pre_test_acc,
+                        test_loss=test_loss,
+                        test_acc=test_acc,
+                    )
+                )
+
+                time.sleep(0.2 if reply.accepted else 1.0)
+                continue
+
+            if stage == fed_pb2.STAGE_FEATURE_UPLOAD:
+                has_feature_cfg = task.HasField("feature") if hasattr(task, "HasField") else False
+                feature_batch_size = (
+                    task.feature.batch_size if has_feature_cfg and task.feature.batch_size > 0 else args.batch_size
+                )
+                keep_spatial = bool(task.feature.keep_spatial) if has_feature_cfg else False
+                include_test = bool(task.feature.include_test_split) if has_feature_cfg else True
+
+                if model is None:
+                    model = FedEXTModel(
+                        client_index,
+                        cfg.model_name,
+                        args.feature_dim,
+                        args.num_classes,
+                        args.encoder_ratio,
+                    ).to(device)
+                    if task.global_model:
+                        state_dict = bytes_to_state_dict(task.global_model)
+                        model.load_state_dict(state_dict, strict=False)
+
+                if task.participate and not feature_uploaded:
+                    feature_train_loader, feature_test_loader = client_data_loader(
+                        args.data_root,
+                        args.dataset_name,
+                        client_index,
+                        feature_batch_size,
+                    )
+
+                    metadata = {
+                        "client_index": client_index,
+                        "dataset": args.dataset_name,
+                        "batch_size": feature_batch_size,
+                        "keep_spatial": keep_spatial,
+                        "include_test": include_test,
+                        "encoder_ratio": args.encoder_ratio,
+                        "model_name": cfg.model_name,
+                        "feature_dim": args.feature_dim,
+                        "layer_split_index": getattr(model, "layer_split_index", None),
+                        "total_layers": len(getattr(model, "layers_list", []) or []),
+                    }
+
+                    payload_bytes = build_feature_payload(
+                        model,
+                        feature_train_loader,
+                        feature_test_loader if include_test else None,
+                        device,
+                        keep_spatial,
+                        include_test,
+                        metadata,
+                    )
+
+                    max_bytes = int(args.max_message_mb) * 1024 * 1024
+                    margin = 512 * 1024  # 512KB 裕量，确保不会触达上限
+                    chunk_size = max(1, max_bytes - margin)
+                    total_chunks = max(1, (len(payload_bytes) + chunk_size - 1) // chunk_size)
+
+                    acked = False
+                    for chunk_id in range(total_chunks):
+                        start = chunk_id * chunk_size
+                        end = min(len(payload_bytes), start + chunk_size)
+                        chunk = payload_bytes[start:end]
+
+                        feature_reply = stub.UploadFeatures(
+                            fed_pb2.FeatureUploadRequest(
+                                client_id=client_id,
+                                client_index=client_index,
+                                payload=chunk,
+                                payload_type="torch",
+                                chunk_id=chunk_id,
+                                total_chunks=total_chunks,
+                            )
+                        )
+
+                        if chunk_id == total_chunks - 1 and feature_reply.accepted:
+                            acked = True
+                            logger.info(
+                                f"[Client {client_id}] Uploaded feature dataset "
+                                f"({total_chunks} chunks, batch_size={metadata['batch_size']})"
+                            )
+
+                        if not feature_reply.accepted:
+                            logger.warning(
+                                f"[Client {client_id}] Feature upload chunk {chunk_id+1}/{total_chunks} "
+                                "rejected; will retry later"
+                            )
+                            break
+
+                    feature_uploaded = acked
+
+                time.sleep(1.0)
+                continue
+
+            if stage == fed_pb2.STAGE_FINALIZE:
+                logger.info(f"[Client {client_id}] Received finalize signal at round {task.round}.")
                 if task.global_model:
                     if model is None:
                         model = FedEXTModel(
@@ -200,191 +369,27 @@ def main():
                         ).to(device)
                     state_dict = bytes_to_state_dict(task.global_model)
                     model.load_state_dict(state_dict, strict=False)
-                time.sleep(1.0)
-                continue
+                    if args.run_dir:
+                        run_dir = Path(args.run_dir).expanduser().resolve()
+                        run_dir.mkdir(parents=True, exist_ok=True)
+                        save_path = run_dir / f"client_{client_index:03d}_final.pt"
+                        torch.save(model.state_dict(), save_path)
+                        logger.info(f"[Client {client_id}] Saved final model to {save_path}")
 
-            if model is None:
-                model = FedEXTModel(
-                    client_index,
-                    task.config.model_name,
-                    args.feature_dim,
-                    args.num_classes,
-                    args.encoder_ratio,
-                ).to(device)
-
-            if task.global_model:
-                state_dict = bytes_to_state_dict(task.global_model)
-                model.load_state_dict(state_dict, strict=False)
-
-            pre_test_loss, pre_test_acc = evaluate(model, test_loader, device=device)
-            logger.info(
-                f"[Client {client_id}][Round {task.round}] (pre-trained) test_acc={pre_test_acc:.4f}"
-            )
-            client_pre_eval_acc.append(pre_test_acc)
-            client_pre_eval_loss.append(pre_test_loss)
-
-            optimizer = torch.optim.SGD(
-                model.parameters(),
-                lr=task.config.lr,
-                momentum=task.config.momentum,
-                weight_decay=5e-4,
-            )
-            train_loss_post, train_acc_post = train_local(
-                model,
-                train_loader,
-                epochs=task.config.local_epochs,
-                optimizer=optimizer,
-                device=device,
-            )
-            test_loss, test_acc = evaluate(model, test_loader, device=device)
-            logger.info(
-                f"[Client {client_id}][Round {task.round}] (post-trained) "
-                f"train_acc={train_acc_post:.4f} test_acc={test_acc:.4f}"
-            )
-
-            client_post_eval_acc.append(test_acc)
-            client_post_eval_loss.append(test_loss)
-
-            local_bytes = state_dict_to_bytes(model.state_dict())
-            reply = stub.UploadUpdate(
-                fed_pb2.UploadRequest(
-                    client_id=client_id,
-                    group_id=group_index,
-                    round=task.round,
-                    local_model=local_bytes,
-                    num_samples=train_size,
-                    train_loss=pre_test_loss,
-                    train_acc=pre_test_acc,
-                    test_loss=test_loss,
-                    test_acc=test_acc,
-                )
-            )
-
-            time.sleep(0.2 if reply.accepted else 1.0)
-            continue
-
-        if stage == fed_pb2.STAGE_FEATURE_UPLOAD:
-            has_feature_cfg = task.HasField("feature") if hasattr(task, "HasField") else False
-            feature_batch_size = (
-                task.feature.batch_size if has_feature_cfg and task.feature.batch_size > 0 else args.batch_size
-            )
-            keep_spatial = bool(task.feature.keep_spatial) if has_feature_cfg else False
-            include_test = bool(task.feature.include_test_split) if has_feature_cfg else True
-
-            if model is None:
-                model = FedEXTModel(
-                    client_index,
-                    cfg.model_name,
-                    args.feature_dim,
-                    args.num_classes,
-                    args.encoder_ratio,
-                ).to(device)
-                if task.global_model:
-                    state_dict = bytes_to_state_dict(task.global_model)
-                    model.load_state_dict(state_dict, strict=False)
-
-            if task.participate and not feature_uploaded:
-                feature_train_loader, feature_test_loader = client_data_loader(
-                    args.data_root,
-                    args.dataset_name,
-                    client_index,
-                    feature_batch_size,
-                )
-
-                metadata = {
-                    "client_index": client_index,
-                    "dataset": args.dataset_name,
-                    "batch_size": feature_batch_size,
-                    "keep_spatial": keep_spatial,
-                    "include_test": include_test,
-                    "encoder_ratio": args.encoder_ratio,
-                    "model_name": cfg.model_name,
-                    "feature_dim": args.feature_dim,
-                    "layer_split_index": getattr(model, "layer_split_index", None),
-                    "total_layers": len(getattr(model, "layers_list", []) or []),
-                }
-
-                payload_bytes = build_feature_payload(
-                    model,
-                    feature_train_loader,
-                    feature_test_loader if include_test else None,
-                    device,
-                    keep_spatial,
-                    include_test,
-                    metadata,
-                )
-
-                max_bytes = int(args.max_message_mb) * 1024 * 1024
-                margin = 512 * 1024  # 512KB 裕量，确保不会触达上限
-                chunk_size = max(1, max_bytes - margin)
-                total_chunks = max(1, (len(payload_bytes) + chunk_size - 1) // chunk_size)
-
-                acked = False
-                for chunk_id in range(total_chunks):
-                    start = chunk_id * chunk_size
-                    end = min(len(payload_bytes), start + chunk_size)
-                    chunk = payload_bytes[start:end]
-
-                    feature_reply = stub.UploadFeatures(
-                        fed_pb2.FeatureUploadRequest(
-                            client_id=client_id,
-                            client_index=client_index,
-                            payload=chunk,
-                            payload_type="torch",
-                            chunk_id=chunk_id,
-                            total_chunks=total_chunks,
-                        )
+                if start_time is not None and end_time is None:
+                    end_time = time.time()
+                    elapsed = end_time - start_time
+                    logger.info(
+                        f"[Client {client_id}] Total training time: {elapsed:.2f}s ({elapsed/60:.2f} min)"
                     )
-
-                    if chunk_id == total_chunks - 1 and feature_reply.accepted:
-                        acked = True
-                        logger.info(
-                            f"[Client {client_id}] Uploaded feature dataset "
-                            f"({total_chunks} chunks, batch_size={metadata['batch_size']})"
-                        )
-
-                    if not feature_reply.accepted:
-                        logger.warning(
-                            f"[Client {client_id}] Feature upload chunk {chunk_id+1}/{total_chunks} "
-                            "rejected; will retry later"
-                        )
-                        break
-
-                feature_uploaded = acked
+                break
 
             time.sleep(1.0)
-            continue
-
-        if stage == fed_pb2.STAGE_FINALIZE:
-            logger.info(f"[Client {client_id}] Received finalize signal at round {task.round}.")
-            if task.global_model:
-                if model is None:
-                    model = FedEXTModel(
-                        client_index,
-                        cfg.model_name,
-                        args.feature_dim,
-                        args.num_classes,
-                        args.encoder_ratio,
-                    ).to(device)
-                state_dict = bytes_to_state_dict(task.global_model)
-                model.load_state_dict(state_dict, strict=False)
-                if args.run_dir:
-                    run_dir = Path(args.run_dir).expanduser().resolve()
-                    run_dir.mkdir(parents=True, exist_ok=True)
-                    save_path = run_dir / f"client_{client_index:03d}_final.pt"
-                    torch.save(model.state_dict(), save_path)
-                    logger.info(f"[Client {client_id}] Saved final model to {save_path}")
-
-            if start_time is not None and end_time is None:
-                end_time = time.time()
-                elapsed = end_time - start_time
-                logger.info(
-                    f"[Client {client_id}] Total training time: {elapsed:.2f}s ({elapsed/60:.2f} min)"
-                )
-            break
-
-        time.sleep(1.0)
-
+    except grpc.RpcError as e:
+        if e.code() == grpc.StatusCode.CANCELLED:
+            logger.info(f"[Client {client_id}] Connection closed by server, exiting gracefully.")
+        else:
+            raise
     print(f"Client pre acc : {client_pre_eval_acc}")
     print(f"Client post acc : {client_post_eval_acc}")
 if __name__ == "__main__":

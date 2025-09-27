@@ -10,10 +10,10 @@ REPO_ROOT="$(cd "${PROJECT_ROOT}/.." && pwd)"
 # (1) 联邦训练配置
 # ==========================
 ALGORITHM="FedEXT"      # 可选：FedEXT / FedAvg
-DATASET="Cifar10"
-NUM_CLASSES=10
+DATASET="NWPU-RESISC45"
+NUM_CLASSES=45
 NUM_CLIENTS=20
-ROUNDS=2
+ROUNDS=10
 LOCAL_EPOCHS=1
 BATCH_SIZE=10
 LR=0.005
@@ -45,7 +45,7 @@ SERVER_ADDR="127.0.0.1:50052"
 SERVER_DEVICE="cuda"
 CLIENT_DEVICE="cuda"
 CLIENT_GPUS="0"
-SERVER_WARMUP_SEC=5
+SERVER_WARMUP_SEC=10
 CLIENT_STAGGER_SEC=0.3
 
 # ==========================
@@ -72,7 +72,7 @@ WANDB_RUN_NAME_PREFIX="fedext"
 # ==========================
 # 目录准备
 # ==========================
-DATA_ROOT="${REPO_ROOT}/FedReal/dataset"
+DATA_ROOT="${REPO_ROOT}/FedEXT/dataset"
 TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
 RUN_DIR="${PROJECT_ROOT}/runs/${DATASET}/${ALGORITHM}/${TIMESTAMP}"
 mkdir -p "${RUN_DIR}"

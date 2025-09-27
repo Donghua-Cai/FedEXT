@@ -218,7 +218,8 @@ class FedEXTModel(BaseHeadSplit):
 
         self.set_layer_split(split_index)
 
-        print(f"[Client {self.cid}] Auto-split at layer {split_index}/{total_layers} (ratio={ratio:.2f})")
+        if self.cid >= 0:
+            print(f"[Client {self.cid}] Auto-split at layer {split_index}/{total_layers} (ratio={ratio:.2f})")
 
     def set_layer_split(self, layer_split_index):
         """
@@ -456,19 +457,20 @@ class FedEXTModel(BaseHeadSplit):
         
         local_params = total_params - global_params
         
-        print(f"\n[Client {self.cid}] Model Split Configuration:")
-        print(f"  Total layers: {len(self.layers_list)}")
-        print(f"  Split at layer: {self.layer_split_index}")
-        print(f"  Global layers: {len(self.global_layers)} ({global_params:,} params, {global_params/total_params*100:.1f}%)")
-        print(f"  Local layers: {len(self.local_layers)} ({local_params:,} params, {local_params/total_params*100:.1f}%)")
+        if self.cid >= 0:
+            print(f"\n[Client {self.cid}] Model Split Configuration:")
+            print(f"  Total layers: {len(self.layers_list)}")
+            print(f"  Split at layer: {self.layer_split_index}")
+            print(f"  Global layers: {len(self.global_layers)} ({global_params:,} params, {global_params/total_params*100:.1f}%)")
+            print(f"  Local layers: {len(self.local_layers)} ({local_params:,} params, {local_params/total_params*100:.1f}%)")
         
-        if len(self.global_layers) > 0:
-            global_names = [name for name, _ in self.global_layers]
-            print(f"  Global: {global_names[:3]}..." if len(global_names) > 3 else f"  Global: {global_names}")
-        
-        if len(self.local_layers) > 0:
-            local_names = [name for name, _ in self.local_layers]
-            print(f"  Local: {local_names[:3]}..." if len(local_names) > 3 else f"  Local: {local_names}")
+            if len(self.global_layers) > 0:
+                global_names = [name for name, _ in self.global_layers]
+                print(f"  Global: {global_names[:3]}..." if len(global_names) > 3 else f"  Global: {global_names}")
+            
+            if len(self.local_layers) > 0:
+                local_names = [name for name, _ in self.local_layers]
+                print(f"  Local: {local_names[:3]}..." if len(local_names) > 3 else f"  Local: {local_names}")
 
     def update_split_ratio(self, new_ratio):
         """

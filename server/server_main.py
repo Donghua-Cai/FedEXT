@@ -333,6 +333,11 @@ def main():
 
             if phase == "finalize":
                 if not printed_done:
+                    service.end_time = time.time()
+                    elapsed = service.end_time - service.start_time
+                    logger.info(
+                            f"[Time] Algorithm complete. Total training time: {elapsed:.2f}s ({elapsed/60:.2f} min)."
+                        )
                     with service._byte_lock:
                         down = service.bytes_down_global_total
                         up_local = service.bytes_up_local_total
