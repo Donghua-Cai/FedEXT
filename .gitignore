@@ -1,4 +1,5 @@
 /runs/*
+/imgs/*
 /dataset/*
 !/dataset/.gitkeep
 /data/*
