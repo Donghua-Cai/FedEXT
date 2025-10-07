@@ -181,9 +181,7 @@ def main():
             stage = task.stage if hasattr(task, "stage") else fed_pb2.STAGE_TRAINING
 
             if stage == fed_pb2.STAGE_TRAINING:
-                if start_time is None and task.round < cfg.total_rounds:
-                    start_time = time.time()
-                    logger.info("Training timer started.")
+                
 
                 if task.round != last_round:
                     logger.info(f"[Client {client_id}] Enter round {task.round}")
@@ -203,6 +201,11 @@ def main():
                         model.load_state_dict(state_dict, strict=False)
                     time.sleep(1.0)
                     continue
+                
+                if start_time is None and task.round < cfg.total_rounds:
+                    logger.info("********* Get signal, Training started *********")
+                    start_time = time.time()
+                    logger.info("Training timer started.")
 
                 if model is None:
                     model = FedEXTModel(
@@ -216,6 +219,7 @@ def main():
                 if task.global_model:
                     state_dict = bytes_to_state_dict(task.global_model)
                     model.load_state_dict(state_dict, strict=False)
+                    logger.info("[Recv] global model parameters from server")
 
                 pre_test_loss, pre_test_acc = evaluate(model, test_loader, device=device)
                 logger.info(
@@ -260,7 +264,7 @@ def main():
                         test_acc=test_acc,
                     )
                 )
-
+                logger.info("[Send] local model parameters to server")
                 time.sleep(0.2 if reply.accepted else 1.0)
                 continue
 

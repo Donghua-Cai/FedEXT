@@ -23,13 +23,15 @@ from server.aggregator import Aggregator
 from common.data_utils.data_loader import server_data_loader
 
 class FederatedService(fed_pb2_grpc.FederatedServiceServicer):
-    def __init__(self, cfg: FedConfig, public_test_loader, device: str = "cpu", run_dir: Optional[str] = None):
+    def __init__(self, cfg: FedConfig, public_test_loader, device: str = "cpu", run_dir: Optional[str] = None, server_target=0.6, client_target=0.6):
         self.cfg = cfg
         self.aggregator = Aggregator(
             cfg,
             public_test_loader=public_test_loader,
             device=device,
             run_dir=run_dir,
+            server_target=server_target,
+            client_target=client_target,
         )
         self.logger = logging.getLogger("Server")
         self.start_time = None
@@ -93,7 +95,7 @@ class FederatedService(fed_pb2_grpc.FederatedServiceServicer):
             self.start_time = time.time()
             self.logger.info("Training timer started.")
 
-        if global_bytes and len(global_bytes) > 0:
+        if global_bytes and len(global_bytes) > 0 and stage == "training":
             n = len(global_bytes)
             self.logger.info(
                 "[Send] global_model bytes=%s (%0.2f MB) to %s for round=%s stage=%s",
@@ -201,6 +203,8 @@ def main():
     parser.add_argument("--max_message_mb", type=int, default=128)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--num_workers", type=int, default=None, help="Dataloader workers (None = auto)")
+    parser.add_argument("--server_target", type=float, default=0.6)
+    parser.add_argument("--client_target", type=float, default=0.6)
     parser.add_argument("--run_dir", type=str, default=None, help="Directory to store aggregated FedEXT artifacts")
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--wandb_project", type=str, default=None)
@@ -263,6 +267,8 @@ def main():
         public_test_loader=server_test_loader,
         device=args.device,
         run_dir=args.run_dir,
+        server_target=args.server_target,
+        client_target=args.client_target
     )
 
     max_len = cfg.max_message_mb * 1024 * 1024
@@ -296,6 +302,9 @@ def main():
     feature_wait_logged = False
     tail_training_logged = False
     should_exit = False
+
+    client_training_time = None
+
     try:
         while True:
             time.sleep(1)
@@ -312,7 +321,7 @@ def main():
                         service.end_time = time.time()
                         elapsed = service.end_time - service.start_time
                         logger.info(
-                            f"Federated rounds complete. Training time: {elapsed:.2f}s ({elapsed/60:.2f} min)."
+                            f"Federated rounds complete. Client training time: {elapsed:.2f}s ({elapsed/60:.2f} min)."
                         )
                     else:
                         logger.info("Federated rounds complete. Awaiting feature uploads...")
@@ -321,6 +330,11 @@ def main():
 
             if phase == "feature_collection":
                 if not feature_wait_logged:
+                    service.end_time = time.time()
+                    client_training_time = service.end_time - service.start_time
+                    logger.info(
+                        f"Federated rounds complete. Client training time: {client_training_time:.2f}s ({client_training_time/60:.2f} min)."
+                    )
                     logger.info("Awaiting client feature uploads for tail training...")
                     feature_wait_logged = True
                 continue
@@ -336,7 +350,7 @@ def main():
                     service.end_time = time.time()
                     elapsed = service.end_time - service.start_time
                     logger.info(
-                            f"[Time] Algorithm complete. Total training time: {elapsed:.2f}s ({elapsed/60:.2f} min)."
+                            f"[Time] Algorithm complete. Client training time:  {client_training_time:.2f}s ({client_training_time/60:.2f} min ; Server/total training time: {elapsed:.2f}s ({elapsed/60:.2f} min)."
                         )
                     with service._byte_lock:
                         down = service.bytes_down_global_total
@@ -357,7 +371,7 @@ def main():
                     for cid, v in service.bytes_up_features_by_client.items():
                         logger.info(f"[Traffic Detail] {cid} up_features={fmt_bytes(v)}")
 
-                    logger.info(f"Client average acc: {service.aggregator.client_average_test_acc}")
+                    logger.info(f"Client average acc: {service.aggregator.client_average_pre_test_acc}")
                     logger.info(f"Server total acc : {service.aggregator.server_eval_acc}")
                     logger.info(f"Server total loss : {service.aggregator.server_eval_loss}")
 

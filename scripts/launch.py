@@ -80,6 +80,8 @@ def build_server_cmd(args, run_dir: str):
         "--batch_size", str(args.batch_size),
         "--lr", str(args.lr),
         "--momentum", str(args.momentum),
+        "--server_target", str(args.server_target),
+        "--client_target", str(args.client_target),
         "--sample_fraction", str(args.sample_fraction),
         "--seed", str(args.seed),
         "--model_name", args.model_name,
@@ -159,6 +161,8 @@ def parse_args():
     p.add_argument("--momentum", type=float, default=0.9)
     p.add_argument("--sample_fraction", type=float, default=1.0)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--server_target", type=float, default=0.6)
+    p.add_argument("--client_target", type=float, default=0.6)
     p.add_argument("--model_name", type=str, default="resnet18")
     p.add_argument("--max_message_mb", type=int, default=128)
     p.add_argument("--feature_dim", type=int, default=512)

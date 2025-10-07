@@ -23,7 +23,7 @@ logger = logging.getLogger("Server").getChild("Aggregator")
 
 
 class Aggregator:
-    def __init__(self, config, public_test_loader=None, device: str = "cpu", run_dir: Optional[str] = None):
+    def __init__(self, config, public_test_loader=None, device: str = "cpu", run_dir: Optional[str] = None, server_target = 0.6, client_target = 0.6):
         self.cfg = config
         self.device = torch.device(device)
         self.public_test_loader = public_test_loader
@@ -46,6 +46,8 @@ class Aggregator:
         self.require_full = True
         # 使用可重入锁，避免同一线程在阶段转换时二次获取锁导致死锁
         self.lock = threading.RLock()
+
+        self.client_dict = {}
 
         # —— Extended pipeline state ——
         self.phase: str = "training"
@@ -104,6 +106,9 @@ class Aggregator:
             self.feature_dir.mkdir(exist_ok=True)
         else:
             self.feature_dir = None
+
+        self.server_target = server_target
+        self.client_target = client_target
 
         # —— WandB ——
         self.use_wandb = bool(getattr(self.cfg, "use_wandb", False))
@@ -208,8 +213,13 @@ class Aggregator:
             group_id = self._assign_group(client_idx)
             self.client_groups[client_id] = group_id
             logger.info(
-                f"Registered {client_id} (index={client_idx}) assigned to group {group_id}"
+                f"Registered {client_id} (index={client_idx}, ip={client_name}) assigned to group {group_id}"
             )
+            self.client_dict[client_id] = client_name
+            if len(self.client_dict) == 20:
+                logger.info("All client registered successfully!")
+                for name, host in self.client_dict.items():
+                    logger.info(f"Client {name} : IP {host}")
             return client_id, client_idx, group_id
 
     def _ensure_sampling(self):
@@ -503,7 +513,8 @@ class Aggregator:
             self._wandb.log(log_payload, step=self.current_round)
 
         round_finished = self.current_round + 1
-        if round_finished == self.cfg.total_rounds:
+
+        if avg_pre >= self.client_target or round_finished == self.cfg.total_rounds:
             self._persist_final_artifacts(round_finished, agg_global_cpu, agg_local_cpu)
 
         self.current_round += 1
@@ -512,7 +523,7 @@ class Aggregator:
         self.received_updates.clear()
         self.completed_this_round.clear()
 
-        if self.current_round >= self.cfg.total_rounds:
+        if avg_pre >= self.client_target or self.current_round >= self.cfg.total_rounds:
             self._on_training_complete()
 
     # ------------------------------------------------------------------
@@ -821,6 +832,7 @@ class Aggregator:
                 classifier=classifier,
                 classifier_info=classifier_info,
                 config=tail_config,
+                server_target=self.server_target,
                 epoch_log_hook=wandb_epoch_hook,
             )
         except Exception:

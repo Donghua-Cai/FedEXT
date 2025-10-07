@@ -2,6 +2,7 @@ import copy
 import logging
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, Callable
+import tqdm
 
 import torch
 from torch import nn
@@ -147,6 +148,7 @@ def train_tail_classifier(
     classifier: nn.Module,
     classifier_info: Dict[str, object],
     config: TailTrainConfig,
+    server_target: float,
     epoch_log_hook: Optional[Callable[[int, Dict[str, float]], None]] = None,
 ) -> Dict[str, object]:
     if train_features.numel() == 0:
@@ -213,6 +215,7 @@ def train_tail_classifier(
                 f"train_acc={epoch_acc:.4f}",
             ]
 
+            test_acc_epoch = None
             if test_loader is not None:
                 classifier.eval()
                 test_loss_epoch, test_acc_epoch = _evaluate(classifier, test_loader, device, classifier_info)
@@ -221,6 +224,9 @@ def train_tail_classifier(
                 log_parts.append(f"test_loss={test_loss_epoch:.4f}")
                 log_parts.append(f"test_acc={test_acc_epoch:.4f}")
                 classifier.train()
+            if test_acc_epoch >= server_target:
+                logger.info(" — ".join(log_parts))
+                break
 
             logger.info(" — ".join(log_parts))
 
