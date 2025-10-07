@@ -2,7 +2,7 @@ import copy
 import logging
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, Callable
-import tqdm
+from tqdm import tqdm
 
 import torch
 from torch import nn
@@ -182,10 +182,12 @@ def train_tail_classifier(
     )
 
     classifier.train()
-    for epoch in range(config.epochs):
+    pbar = tqdm(range(config.epochs), desc="Tail Training", unit="epoch", dynamic_ncols=True)
+    for epoch in pbar:
         epoch_loss = 0.0
         epoch_total = 0
         correct = 0
+
         for batch_x, batch_y in train_loader:
             inputs = prepare_features_for_classifier(batch_x, classifier_info, device)
             labels = batch_y.to(device)
@@ -209,27 +211,46 @@ def train_tail_classifier(
                 "train_acc": epoch_acc,
             }
 
-            log_parts = [
-                f"Tail epoch {epoch + 1}/{config.epochs}",
-                f"loss={epoch_loss_avg:.4f}",
-                f"train_acc={epoch_acc:.4f}",
-            ]
-
+            test_loss_epoch = None
             test_acc_epoch = None
             if test_loader is not None:
                 classifier.eval()
-                test_loss_epoch, test_acc_epoch = _evaluate(classifier, test_loader, device, classifier_info)
+                test_loss_epoch, test_acc_epoch = _evaluate(
+                    classifier, test_loader, device, classifier_info
+                )
+                classifier.train()
                 epoch_metrics["test_loss"] = test_loss_epoch
                 epoch_metrics["test_acc"] = test_acc_epoch
-                log_parts.append(f"test_loss={test_loss_epoch:.4f}")
-                log_parts.append(f"test_acc={test_acc_epoch:.4f}")
-                classifier.train()
-            if test_acc_epoch >= server_target:
-                logger.info(" — ".join(log_parts))
+
+            # —— 每轮用 logger.info 输出 —— 
+            if test_loader is not None:
+                logger.info(
+                    "Tail epoch %d/%d — loss=%.4f — train_acc=%.4f — test_loss=%.4f — test_acc=%.4f",
+                    epoch + 1, config.epochs, epoch_loss_avg, epoch_acc, test_loss_epoch, test_acc_epoch
+                )
+                # 也把关键信息挂到进度条上（不会打断 logger 输出）
+                pbar.set_postfix(
+                    loss=f"{epoch_loss_avg:.4f}",
+                    train_acc=f"{epoch_acc:.4f}",
+                    test_loss=f"{test_loss_epoch:.4f}",
+                    test_acc=f"{test_acc_epoch:.4f}",
+                )
+            else:
+                logger.info(
+                    "Tail epoch %d/%d — loss=%.4f — train_acc=%.4f",
+                    epoch + 1, config.epochs, epoch_loss_avg, epoch_acc
+                )
+                pbar.set_postfix(
+                    loss=f"{epoch_loss_avg:.4f}",
+                    train_acc=f"{epoch_acc:.4f}",
+                )
+
+            # —— 提前停止 —— 
+            if test_acc_epoch is not None and server_target is not None and test_acc_epoch >= server_target:
+                logger.info("Server target reached (%.4f >= %.4f), stop training.", test_acc_epoch, server_target)
                 break
 
-            logger.info(" — ".join(log_parts))
-
+            # —— 可选的回调 —— 
             if epoch_log_hook is not None:
                 try:
                     epoch_log_hook(epoch + 1, epoch_metrics)

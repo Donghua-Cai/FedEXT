@@ -7,6 +7,8 @@ import time
 import threading
 from collections import defaultdict
 from typing import Optional
+import matplotlib.pyplot as plt
+from datetime import datetime
 
 import grpc
 import torch
@@ -206,6 +208,7 @@ def main():
     parser.add_argument("--server_target", type=float, default=0.6)
     parser.add_argument("--client_target", type=float, default=0.6)
     parser.add_argument("--run_dir", type=str, default=None, help="Directory to store aggregated FedEXT artifacts")
+    parser.add_argument("--img_dir",type=str,default=None,help="Directory to save training plots (accuracy curves). ")
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--wandb_project", type=str, default=None)
     parser.add_argument("--wandb_entity", type=str, default=None)
@@ -224,6 +227,15 @@ def main():
 
     set_seed(args.seed)
     # 统一初始化命名 logger
+
+    def _resolve_img_dir(args):
+        if args.img_dir and len(args.img_dir.strip()) > 0:
+            return args.img_dir
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return os.path.join("./imgs", args.dataset_name, ts)
+
+    img_save_dir = _resolve_img_dir(args)
+
     logger = setup_logger("Server", level=logging.INFO)
 
     cfg = FedConfig(
@@ -350,7 +362,7 @@ def main():
                     service.end_time = time.time()
                     elapsed = service.end_time - service.start_time
                     logger.info(
-                            f"[Time] Algorithm complete. Client training time:  {client_training_time:.2f}s ({client_training_time/60:.2f} min ; Server/total training time: {elapsed:.2f}s ({elapsed/60:.2f} min)."
+                            f"[Time] Algorithm complete. Client training time:  {client_training_time:.2f}s ({client_training_time/60:.2f} min) ; Server/total training time: {elapsed:.2f}s ({elapsed/60:.2f} min)."
                         )
                     with service._byte_lock:
                         down = service.bytes_down_global_total
@@ -380,6 +392,40 @@ def main():
                     if getattr(service.aggregator, "tail_classifier_info", None):
                         logger.info(f"Tail classifier info: {service.aggregator.tail_classifier_info}")
 
+                     # ======== Plot & Save Accuracy Curves ========
+                    try:
+                        os.makedirs(img_save_dir, exist_ok=True)
+                        logger.info(f"Start plotting, target dir = {img_save_dir}")
+                        client_acc_list = service.aggregator.client_average_pre_test_acc
+                        server_acc_list = service.aggregator.server_eval_acc
+
+                        if not client_acc_list and not server_acc_list:
+                            logger.warning("No accuracy data available for plotting, skipping.")
+                        else:
+                            plt.figure(figsize=(8, 6))
+                            if client_acc_list:
+                                plt.plot(range(1, len(client_acc_list) + 1),
+                                        client_acc_list, marker="o", label="Client Avg Pre-Test Acc")
+                            if server_acc_list:
+                                plt.plot(range(1, len(server_acc_list) + 1),
+                                        server_acc_list, marker="x", label="Server Eval Acc")
+
+                            plt.title(f"Federated Training Accuracy ({args.dataset_name})")
+                            plt.xlabel("Round")
+                            plt.ylabel("Accuracy")
+                            plt.grid(True)
+                            plt.legend()
+                            plt.tight_layout()
+
+                            save_path = os.path.join(img_save_dir, "accuracy_curve.png")
+                            plt.savefig(save_path)
+                            plt.close()
+
+                            logger.info(f"Accuracy plot saved to: {save_path}")
+                            logger.info(f"Images directory: {img_save_dir}")
+                    except Exception as e:
+                        logger.exception(f"Failed to plot/save accuracy curves: {e}")
+                    # ======== End Plot ========
                     printed_done = True
                     should_exit = True
                 break
