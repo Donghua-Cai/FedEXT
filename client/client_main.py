@@ -219,7 +219,7 @@ def main():
                 if task.global_model:
                     state_dict = bytes_to_state_dict(task.global_model)
                     model.load_state_dict(state_dict, strict=False)
-                    logger.info("[Recv] global model parameters from server")
+                    logger.info(f"[Recv] global model parameters from server（{args.server}）")
 
                 pre_test_loss, pre_test_acc = evaluate(model, test_loader, device=device)
                 logger.info(
@@ -264,7 +264,7 @@ def main():
                         test_acc=test_acc,
                     )
                 )
-                logger.info("[Send] local model parameters to server")
+                logger.info(f"[Send] local model parameters to server （{args.server}）")
                 time.sleep(0.2 if reply.accepted else 1.0)
                 continue
 
