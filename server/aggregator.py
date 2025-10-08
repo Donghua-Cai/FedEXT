@@ -56,6 +56,7 @@ class Aggregator:
         self._feature_chunk_states: Dict[str, Dict[str, Any]] = {}
         self.tail_metrics: Optional[Dict[str, Any]] = None
         self._tail_training_started = False
+        self.tail_test_acc = None
 
         self.feature_config = {
             "batch_size": int(getattr(self.cfg, "feature_batch_size", getattr(self.cfg, "batch_size", 64))),
@@ -515,6 +516,7 @@ class Aggregator:
         round_finished = self.current_round + 1
 
         if avg_pre >= self.client_target or round_finished == self.cfg.total_rounds:
+            logger.info(f"avg : {avg_pre}, target : {self.client_target}")
             self._persist_final_artifacts(round_finished, agg_global_cpu, agg_local_cpu)
 
         self.current_round += 1
@@ -835,6 +837,7 @@ class Aggregator:
                 server_target=self.server_target,
                 epoch_log_hook=wandb_epoch_hook,
             )
+            self.tail_test_acc = result["test_acc_history"]
         except Exception:
             logger.exception("Tail training failed")
             with self.lock:

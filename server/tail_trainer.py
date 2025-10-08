@@ -139,7 +139,6 @@ def _evaluate(
         return 0.0, 0.0
     return loss_sum / total, correct / total
 
-
 def train_tail_classifier(
     train_features: torch.Tensor,
     train_labels: torch.Tensor,
@@ -147,10 +146,15 @@ def train_tail_classifier(
     test_labels: Optional[torch.Tensor],
     classifier: nn.Module,
     classifier_info: Dict[str, object],
-    config: TailTrainConfig,
+    config,
     server_target: float,
     epoch_log_hook: Optional[Callable[[int, Dict[str, float]], None]] = None,
 ) -> Dict[str, object]:
+    """
+    Tail training for FedEXT — server-side classifier fine-tuning.
+    Records test accuracy of each epoch.
+    """
+
     if train_features.numel() == 0:
         raise ValueError("Empty training features received by tail trainer")
 
@@ -182,8 +186,12 @@ def train_tail_classifier(
     )
 
     classifier.train()
-    pbar = tqdm(range(config.epochs), desc="Tail Training", unit="epoch", dynamic_ncols=True)
-    for epoch in pbar:
+    pbar = tqdm(total=config.epochs, desc="Tail Training", unit="epoch", dynamic_ncols=True)
+
+    # —— 新增：记录每轮 test acc —— 
+    test_acc_history = []
+
+    for epoch in range(config.epochs):
         epoch_loss = 0.0
         epoch_total = 0
         correct = 0
@@ -222,41 +230,59 @@ def train_tail_classifier(
                 epoch_metrics["test_loss"] = test_loss_epoch
                 epoch_metrics["test_acc"] = test_acc_epoch
 
-            # —— 每轮用 logger.info 输出 —— 
+            # —— 记录 test acc —— 
+            test_acc_history.append(test_acc_epoch if test_acc_epoch is not None else None)
+
+            # —— tqdm进度更新 —— 
             if test_loader is not None:
-                logger.info(
-                    "Tail epoch %d/%d — loss=%.4f — train_acc=%.4f — test_loss=%.4f — test_acc=%.4f",
-                    epoch + 1, config.epochs, epoch_loss_avg, epoch_acc, test_loss_epoch, test_acc_epoch
-                )
-                # 也把关键信息挂到进度条上（不会打断 logger 输出）
                 pbar.set_postfix(
                     loss=f"{epoch_loss_avg:.4f}",
                     train_acc=f"{epoch_acc:.4f}",
                     test_loss=f"{test_loss_epoch:.4f}",
                     test_acc=f"{test_acc_epoch:.4f}",
+                    refresh=False,
+                )
+            else:
+                pbar.set_postfix(
+                    loss=f"{epoch_loss_avg:.4f}",
+                    train_acc=f"{epoch_acc:.4f}",
+                    refresh=False,
+                )
+
+            pbar.update(1)
+
+            # —— 每轮日志输出 —— 
+            if test_loader is not None:
+                logger.info(
+                    "Tail epoch %d/%d — loss=%.4f — train_acc=%.4f — test_loss=%.4f — test_acc=%.4f",
+                    epoch + 1, config.epochs, epoch_loss_avg, epoch_acc, test_loss_epoch, test_acc_epoch
                 )
             else:
                 logger.info(
                     "Tail epoch %d/%d — loss=%.4f — train_acc=%.4f",
                     epoch + 1, config.epochs, epoch_loss_avg, epoch_acc
                 )
-                pbar.set_postfix(
-                    loss=f"{epoch_loss_avg:.4f}",
-                    train_acc=f"{epoch_acc:.4f}",
-                )
 
-            # —— 提前停止 —— 
+            # —— 提前停止条件 —— 
             if test_acc_epoch is not None and server_target is not None and test_acc_epoch >= server_target:
-                logger.info("Server target reached (%.4f >= %.4f), stop training.", test_acc_epoch, server_target)
+                logger.info(
+                    "Server target reached (%.4f >= %.4f), stop training.",
+                    test_acc_epoch, server_target,
+                )
+                # 强制刷新进度条
+                pbar.n = epoch + 1
+                pbar.last_print_n = -1
+                pbar.refresh()
                 break
 
-            # —— 可选的回调 —— 
+            # —— 可选日志回调 —— 
             if epoch_log_hook is not None:
                 try:
                     epoch_log_hook(epoch + 1, epoch_metrics)
-                except Exception as exc:  # pragma: no cover
+                except Exception as exc:
                     logger.warning("Tail epoch logging hook failed: %s", exc)
 
+    pbar.close()
     classifier.eval()
     train_loss, train_acc = _evaluate(classifier, train_loader, device, classifier_info)
 
@@ -271,8 +297,10 @@ def train_tail_classifier(
     if eval_results is not None:
         metrics["test_loss"], metrics["test_acc"] = eval_results
 
+    # —— 返回 test_acc_history —— 
     return {
         "state_dict": classifier.cpu().state_dict(),
         "metrics": metrics,
         "classifier_info": classifier_info,
+        "test_acc_history": test_acc_history,
     }

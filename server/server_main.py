@@ -396,19 +396,22 @@ def main():
                     try:
                         os.makedirs(img_save_dir, exist_ok=True)
                         logger.info(f"Start plotting, target dir = {img_save_dir}")
+
                         client_acc_list = service.aggregator.client_average_pre_test_acc
                         server_acc_list = service.aggregator.server_eval_acc
+                        tail_test_acc = getattr(service.aggregator, "tail_test_acc", None)
 
+                        # ---------- Plot federated (client/server) accuracy ----------
                         if not client_acc_list and not server_acc_list:
                             logger.warning("No accuracy data available for plotting, skipping.")
                         else:
                             plt.figure(figsize=(8, 6))
                             if client_acc_list:
                                 plt.plot(range(1, len(client_acc_list) + 1),
-                                        client_acc_list, marker="o", label="Client Avg Pre-Test Acc")
+                                         client_acc_list, marker="o", label="Client Avg Acc")
                             if server_acc_list:
                                 plt.plot(range(1, len(server_acc_list) + 1),
-                                        server_acc_list, marker="x", label="Server Eval Acc")
+                                         server_acc_list, marker="x", label="Server Eval Acc")
 
                             plt.title(f"Federated Training Accuracy ({args.dataset_name})")
                             plt.xlabel("Round")
@@ -420,9 +423,30 @@ def main():
                             save_path = os.path.join(img_save_dir, "accuracy_curve.png")
                             plt.savefig(save_path)
                             plt.close()
-
                             logger.info(f"Accuracy plot saved to: {save_path}")
-                            logger.info(f"Images directory: {img_save_dir}")
+
+                        # ---------- Plot tail classifier test accuracy ----------
+                        if tail_test_acc and isinstance(tail_test_acc, (list, tuple)):
+                            plt.figure(figsize=(8, 6))
+                            plt.plot(range(1, len(tail_test_acc) + 1),
+                                     tail_test_acc, marker="s", color="tab:orange",
+                                     label="Tail Test Acc")
+                            plt.title(f"Server Tail Classifier Test Accuracy ({args.dataset_name})")
+                            plt.xlabel("Epoch")
+                            plt.ylabel("Accuracy")
+                            plt.grid(True)
+                            plt.legend()
+                            plt.tight_layout()
+
+                            tail_path = os.path.join(img_save_dir, "server_tail_test_acc.png")
+                            plt.savefig(tail_path)
+                            plt.close()
+                            logger.info(f"Tail test accuracy plot saved to: {tail_path}")
+                        else:
+                            logger.warning("No tail_test_acc data available for plotting tail accuracy.")
+                        
+                        logger.info(f"Images directory: {img_save_dir}")
+
                     except Exception as e:
                         logger.exception(f"Failed to plot/save accuracy curves: {e}")
                     # ======== End Plot ========

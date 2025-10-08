@@ -205,7 +205,7 @@ def main():
                 if start_time is None and task.round < cfg.total_rounds:
                     logger.info("********* Get signal, Training started *********")
                     start_time = time.time()
-                    logger.info("Training timer started.")
+                    # logger.info("Training timer started.")
 
                 if model is None:
                     model = FedEXTModel(
@@ -361,7 +361,7 @@ def main():
                 continue
 
             if stage == fed_pb2.STAGE_FINALIZE:
-                logger.info(f"[Client {client_id}] Received finalize signal at round {task.round}.")
+                logger.info(f"[Client {client_id}] Received finalize signal")# at round {task.round}.")
                 if task.global_model:
                     if model is None:
                         model = FedEXTModel(
@@ -383,9 +383,9 @@ def main():
                 if start_time is not None and end_time is None:
                     end_time = time.time()
                     elapsed = end_time - start_time
-                    logger.info(
+                    """ logger.info(
                         f"[Client {client_id}] Total training time: {elapsed:.2f}s ({elapsed/60:.2f} min)"
-                    )
+                    ) """
                 break
 
             time.sleep(1.0)
