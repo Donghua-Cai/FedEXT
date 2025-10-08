@@ -432,6 +432,7 @@ class Aggregator:
         local_params_by_group: Dict[int, List[OrderedDict]] = defaultdict(list)
         weights_by_group: Dict[int, List[float]] = defaultdict(list)
 
+        logger.info("Start aggregating ......")
         for client_id, payload in self.received_updates.items():
             state_dict = payload.get("state_dict", OrderedDict())
             group_id = payload.get("group_id", 0)
@@ -457,6 +458,8 @@ class Aggregator:
 
         aggregated_global = self._fedavg_aggregation(global_params_list)
         aggregated_local_by_group: Dict[int, OrderedDict] = {}
+
+        logger.info("Aggregation finished")
 
         for group_id, params_list in local_params_by_group.items():
             group_weights = weights_by_group[group_id]
