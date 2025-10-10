@@ -9,6 +9,7 @@ import signal
 import subprocess
 from datetime import datetime
 from pathlib import Path
+import time
 
 # —— 预清理：杀掉已有的 server / client 进程 ——
 def kill_existing():
@@ -161,8 +162,8 @@ def parse_args():
     p.add_argument("--momentum", type=float, default=0.9)
     p.add_argument("--sample_fraction", type=float, default=1.0)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--server_target", type=float, default=0.8)
-    p.add_argument("--client_target", type=float, default=0.6)
+    p.add_argument("--server_target", type=float, default=0.9)
+    p.add_argument("--client_target", type=float, default=0.9)
     p.add_argument("--model_name", type=str, default="resnet18")
     p.add_argument("--max_message_mb", type=int, default=128)
     p.add_argument("--feature_dim", type=int, default=512)
@@ -298,4 +299,7 @@ def main():
     print("[Launcher] Done.")
 
 if __name__ == "__main__":
+    start_time = time.time()
     main()
+    end_time = time.time()
+    print(f"total time : {end_time - start_time} second")
