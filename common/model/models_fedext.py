@@ -466,11 +466,13 @@ class FedEXTModel(BaseHeadSplit):
         
             if len(self.global_layers) > 0:
                 global_names = [name for name, _ in self.global_layers]
-                print(f"  Global: {global_names[:3]}..." if len(global_names) > 3 else f"  Global: {global_names}")
+                print(f"  Global: {global_names[:len(global_names)]}" )
+                # print(f"  Global: {global_names[:3]}..." if len(global_names) > 3 else f"  Global: {global_names}")
             
             if len(self.local_layers) > 0:
                 local_names = [name for name, _ in self.local_layers]
-                print(f"  Local: {local_names[:3]}..." if len(local_names) > 3 else f"  Local: {local_names}")
+                print(f"  Local: {local_names[:len(local_names)]}")
+                # print(f"  Local: {local_names[:3]}..." if len(local_names) > 3 else f"  Local: {local_names}")
 
     def update_split_ratio(self, new_ratio):
         """
