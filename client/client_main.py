@@ -7,6 +7,9 @@ import grpc
 import torch
 import logging
 from typing import Optional
+import matplotlib.pyplot as plt
+from datetime import datetime
+import os
 
 
 from proto import fed_pb2, fed_pb2_grpc
@@ -114,6 +117,7 @@ def main():
                         help="Batch size")
     parser.add_argument("--num_workers", type=int, default=None,
                         help="Dataloader workers (None = auto)")
+    parser.add_argument("--img_dir",type=str,default=None,help="Directory to save training plots (accuracy curves). ")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--encoder_ratio", type=float, default=1.0)
     parser.add_argument("--algorithm", type=str, default="FedEXT")
@@ -123,6 +127,14 @@ def main():
                         help="gRPC message size limit in MB for client<->server communication")
     
     args = parser.parse_args()
+
+    def _resolve_img_dir(args):
+        if args.img_dir and len(args.img_dir.strip()) > 0:
+            return args.img_dir
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return os.path.join("./imgs", args.dataset_name, ts)
+
+    img_save_dir = _resolve_img_dir(args)
 
     set_seed(args.seed)
     logger = setup_logger(f"Client-{args.client_name}", level=logging.INFO)
@@ -396,5 +408,24 @@ def main():
             raise
     print(f"Client pre acc : {client_pre_eval_acc}")
     print(f"Client post acc : {client_post_eval_acc}")
+    try:
+        os.makedirs(img_save_dir, exist_ok=True)
+        if len(client_pre_eval_acc) > 0:
+            rounds = list(range(len(client_pre_eval_acc)))
+            plt.figure()
+            plt.plot(rounds, client_pre_eval_acc, marker='o')
+            plt.title(f"Client {client_index} Pre-Eval Accuracy")
+            plt.xlabel("Round")
+            plt.ylabel("Accuracy")
+            plt.grid(True, linestyle="--", alpha=0.5)
+            out_path = os.path.join(img_save_dir, f"client_{client_index:03d}_pre_acc.png")
+            plt.savefig(out_path, bbox_inches="tight")
+            plt.close()
+            logger.info(f"[Client {client_id}] Saved pre-eval accuracy plot to {out_path}")
+        else:
+            logger.warning(f"[Client {client_id}] No pre-eval accuracy data to plot.")
+    except Exception as e:
+        logger.exception(f"[Client {client_id}] Failed to save pre-eval accuracy plot: {e}")
+
 if __name__ == "__main__":
     main()
